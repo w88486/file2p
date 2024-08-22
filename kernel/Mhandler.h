@@ -28,7 +28,7 @@ public:
 	ByteMsg(string text, SysIOMsg& ioMsg) :content(text), SysIOMsg(ioMsg.dic) {};
 };
 class UserData :public ByteMsg{
-
+	
 };
 
 

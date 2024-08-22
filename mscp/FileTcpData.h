@@ -1,5 +1,5 @@
 #pragma once
-#include "MyinsTcp.h"
+#include "../kernel/MyinsTcp.h"
 class FileTcpData :
     public TcpData
 {

@@ -1,11 +1,8 @@
 #include<iostream>
-#include"MyinsKernel.h"
-#include"MChannel.h"
-#include"Mhandler.h"
-#include"MyinsTcp.h"
+#include"../kernel/MyinsTcp.h"
 #include"FileTcpData.h"
 #include"FileCpCli.h"
-#include"threadpool.h"
+#include"../kernel/threadpool.h"
 
 using namespace std;
 int main() {

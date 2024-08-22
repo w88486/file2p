@@ -1,10 +1,11 @@
 #include "FileTcpData.h"
-#include "FileControl.h"
+#include "FileCpServer.h"
 TcpData* FileTcpFact::CreateTcpChannel(Arg _arg)
 {
     FileTcpData* channel = new FileTcpData(_arg);
-    // 
-    channel->m_out = new TcpControl(_arg);
+    // 关联通道和处理类
+    _arg.m_channel = channel;
+    channel->m_out = new FileCpServer(_arg);
     return channel;
 }
 

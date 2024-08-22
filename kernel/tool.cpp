@@ -1,17 +1,6 @@
-#include <sys/socket.h>
-#include <unistd.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/types.h>
-#include <netinet/in.h>
-#include <string.h>
-#include <arpa/inet.h>
-#include <errno.h>
-#include <sys/select.h>
 #include "tool.h"
-#include <openssl/sha.h>
-#include <algorithm>
-#define TIMEOUT 1000
+#include "typedef.h"
+
 int mgets(char *buf, int size, int fd)
 {
     int ret = 0;
@@ -114,23 +103,23 @@ void xto_char(unsigned char *xmd, char *smd, int len)
     }
 }
 
-int check(char *clientmd, unsigned char *servermd)
+int check(const char *clientmd, unsigned char *servermd)
 {
     char md[70];
     xto_char(servermd, md, SHA256_DIGEST_LENGTH);
     return 0 == strncmp(clientmd, md, strlen(md));
 }
 
-int find_nnull(std::vector<std::string> *l)
+int find_nnull(std::vector<std::string> &l)
 {
-    auto i = std::find_if(l->begin(), l->end(), [](std::string s){return s.empty();});
-    if (i == l->end())
+    auto i = std::find_if(l.begin(), l.end(), [](std::string s){return s.empty();});
+    if (i == l.end())
     {
         return -1;
     }
     else
     {
-        return i - l->begin();
+        return i - l.begin();
     }
 }
 
@@ -142,4 +131,159 @@ void printT(int i, int sum)
     {
         printf("=");
     }
+}
+
+int recvfile(int fd, std::string outfile, int left_size, EVP_MD_CTX *filectx)
+{
+    // 初始化hash生成器
+    unsigned char md[SHA256_DIGEST_LENGTH];
+    EVP_MD_CTX *ctx = EVP_MD_CTX_create();
+    const EVP_MD *mdal = EVP_sha256();
+    EVP_DigestInit(ctx, mdal);
+
+    int outfd = open(outfile.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0777);
+    char buf[BUFSIZE];
+    printf("文件长度%d\n", left_size);
+    int size;
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    FD_SET(fd, &readfds);
+    // 读取文件
+    if (0 <= select(fd + 1, &readfds, NULL, &readfds, NULL))
+    {
+        while(size = recv(fd, &buf, BUFSIZE, MSG_DONTWAIT))
+        {
+            if (EAGAIN == errno)
+            {
+                errno = 0;
+                continue;
+            }
+            else if (-1 == size)
+            {
+                continue;
+            }
+            else if (0 == size)
+            {
+                EVP_MD_CTX_destroy(ctx);
+                return size;
+            }
+            printf("read %d left size %d\n", size, left_size);
+            EVP_DigestUpdate(ctx, buf, size);
+            if (NULL != filectx)
+            {
+                EVP_DigestUpdate(filectx, buf, size);
+            }
+            write(outfd, buf, size);
+            left_size -= size;
+            if (0 >= left_size)
+            {
+                break;
+            }
+        }
+    }
+    // 返回结果
+    char *ret = "ACK";
+    unsigned int len = SHA256_DIGEST_LENGTH;
+    EVP_DigestFinal(ctx, md, &len);
+    if (0 == check(outfile.c_str(), md))
+    {
+        ret = "ERR";
+        fprintf(stderr, "接收%s的hash值有误！\n", outfile);
+    }
+    else
+    {
+        printf("接收%s文件成功\n", outfile);
+    }
+    writemsg(fd, ret, 4);
+    close(outfd);
+    return size;
+}
+
+int loadmd(int fd, char *mdfile, int left_size, std::vector<std::string> &md, int num)
+{
+    // 打开md文件
+    int mdfd = open(mdfile, O_RDWR | O_CREAT | O_TRUNC, 0777);
+    if (-1 == mdfd)
+    {
+        fprintf(stderr ,"打开文件%s失败！\n", mdfile);
+        write(fd, "ERR", 4);
+        return -1;
+    }
+    char buf[BUFSIZE];
+    // 返回0对端断开连接
+    printf("md文件长度%d\n", left_size);
+    int size;
+    // 读取md文件
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    FD_SET(fd, &readfds);
+    if (0 <= select(fd + 1, &readfds, NULL, &readfds, NULL))
+    {
+        while(size = recv(fd, &buf, BUFSIZE, MSG_DONTWAIT))
+        {
+            if (EAGAIN == errno)
+            {
+                errno = 0;
+                continue;
+            }
+            else if (-1 == size)
+            {
+                continue;
+            }
+            else if (0 == size)
+            {
+                return size;
+            }
+            write(mdfd, buf, size);
+            left_size -= size;
+            if (0 >= left_size)
+            {
+                break;
+            }
+        }
+    }
+    lseek(mdfd, 0L, SEEK_SET);
+    // 将md文件加载到数组中
+    for (int i = 0; i < num; i++)
+    {
+        char tmp[70];
+        mgets(tmp, 70, mdfd);
+        md.push_back(tmp);
+    }
+    
+    char *ret = "ACK";
+    printf("接收%s文件成功\n", mdfile);
+    writemsg(fd, ret, 4);
+    close(mdfd);
+    return size;
+}
+
+void redownload(int fd)
+{
+    CmdMsg msg;
+    while(0 < readmsg(fd, &msg, sizeof(msg)))
+    {
+        if (CmdMsg::END == msg.type)
+        {
+            break;
+        }
+        recvfile(fd, (char*)msg.filename, msg.filesize, NULL);
+    }
+}
+
+void combinefile(std::vector<std::string> md, const char* filename, int num)
+{
+    int outfd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0777);
+    char buf[BUFSIZE];
+    int size;
+    for (size_t i = 0; i < num; i++)
+    {
+        int infd = open(md[i].c_str(), O_RDONLY);
+        while(0 != (size = read(infd, buf, BUFSIZE)))
+        {
+            write(outfd, buf, size);
+        }
+        close(infd);
+    }
+    close(outfd);
 }

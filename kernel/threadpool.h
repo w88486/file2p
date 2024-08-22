@@ -8,7 +8,7 @@
 #include<assert.h>
 using namespace std;
 const int MAX_THREADS = 1000;
-//�̰߳�ȫ����
+//?????????
 template<typename T>
 class ThreadSafeQue {
 public:
@@ -43,24 +43,24 @@ class threadPool {
 public:
 	threadPool(int number = 1);
 	~threadPool();
-	bool appand(T* request);//���������
+	bool appand(T* request);//?????????
 private:
-	mutex pool_mutex;//�̳߳ص���
-	bool stop;//ֹͣ��־
+	mutex pool_mutex;//???????
+	bool stop;//?????
 	
-	static void* worker(void* arg);//ÿ���̶߳�Ҫִ�еĺ���
+	static void* worker(void* arg);//??????????��????
 	void run();
 
-	ThreadSafeQue<T*>task_queue;//������У��ṩ����
-	vector<thread>work_threads;//��Ŷ�������߳�
+	ThreadSafeQue<T*>task_queue;//??????��???????
+	vector<thread>work_threads;//????????????
 };
 template<typename T>
 threadPool<T>::threadPool(int number) :stop(false) {
-	//����С�����������ֵ
+	//????��????????????
 	if (number <= 0 || number > MAX_THREADS) {
 		throw exception();
 	}
-	//���������̴߳浽�߳�1��
+	//???????????��???1??
 	cout << "threadPool create " << number << " threads" << endl;
 	for (int i = 0; i < number; ++i) {
 		unique_lock<mutex> lk(pool_mutex);
@@ -69,10 +69,10 @@ threadPool<T>::threadPool(int number) :stop(false) {
 }
 template<typename T>
 threadPool<T>::~threadPool() {
-	//��stop������Ҫ����
+	//??stop???????????
 	unique_lock<mutex> lk(pool_mutex);
 	stop = true;
-	//�ȴ������߳̽���
+	//?????????????
 	for (auto& wt : work_threads) {
 		wt.join();
 	}
@@ -85,14 +85,14 @@ bool threadPool<T>::appand(T* request) {
 }
 template<typename T>
 void* threadPool<T>::worker(void* arg) {
-	//�߳�����
+	//???????
 	threadPool* pool = (threadPool*)arg;
 	pool->run();
 	return pool;
 }
 template<typename T>
 void threadPool<T>::run() {
-	//��δֹͣ�����ȡ����
+	//??��????????????
 	while (!stop) {
 		T* request;
 		if (this->task_queue.pop(request)) {

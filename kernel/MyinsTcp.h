@@ -29,7 +29,6 @@ class TcpData : public MChannel {
 public:
 	Mhandler* m_out = NULL;
 	Arg m_arg;
-	int m_fd = -1;
 	//�̳�TcpData������Ӧͨ�����캯�����츸��
 	TcpData(Arg _arg) : m_arg(_arg) {};
 	// ͨ�� MChannel �̳�

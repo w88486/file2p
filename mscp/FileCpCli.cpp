@@ -3,13 +3,13 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include "typedef.h"
 #include <fcntl.h>
 #include <unistd.h>
-#include <hiredis/hiredis.h>
 #include <cstring>
-#include <openssl/evp.h>
 #include <sys/sendfile.h>
+#include <cstdio>
+#include <cstdlib>
+#include "../kernel/tool.h"
 void FileClientUI::redisplay()
 {
     system("clear");
@@ -110,68 +110,9 @@ void FileClientUI::disconnect()
     arg.fd = -1;
 }
 
-void FileClientUI::reupload(long int blocksize)
-{
-    char ret[6];
-    // 重传传输失败的文件
-    int i;
-    messege msg;
-    msg.type = messege::SPLITFILE;
-    while (-1 != (i = find_nnull(&md)))
-    {
-        // 填充消息
-        int fd = open(md[i].c_str(), O_RDONLY);
-        if (-1 == fd)
-        {
-            fprintf(stderr, "缺失文件：%s\n", md[i].c_str());
-            return;
-        }
-        msg.filesize = lseek(fd, 0L, SEEK_END);
-        strncpy((char *)msg.filename, md[i].c_str(), md[i].length() + 1);
-        if (0 == writemsg(arg.fd, &msg, sizeof(msg)))
-        {
-            // 超时了
-            break;
-        }
-        sendfile(arg.fd, fd, 0L, blocksize);
-        readmsg(arg.fd, ret, 6);
-        if (0 == strncmp(ret, "ACK", 3))
-        {
-            printf("重发送%s成功\n", md[i]);
-            md[i] = "";
-        }
-        else
-        {
-            fprintf(stderr, "重发送%s失败！\n", md[i]);
-        }
-    }
-    msg.type = messege::END;
-    writemsg(arg.fd, &msg, sizeof(msg));
-}
-
-int FileClientUI::checkupload(string filename)
-{
-    // run 139.159.195.171 redis-stable.tar.gz
-    redisContext *ctx = redisConnect("127.0.0.1", 6379);
-    if (NULL == ctx)
-    {
-        perror("打开redis失败！\n");
-        return -1;
-    }
-    redisReply *res;
-    res = (redisReply *)redisCommand(ctx, "smembers %s%s", arg.ip, filename.c_str());
-    for (int i = 0; i < res->elements; i++)
-    {
-        md.emplace_back(res->element[i]->str);
-    }
-    freeReplyObject(res);
-    redisFree(ctx);
-    return res->elements;
-}
-
 void FileClientUI::upload()
 {
-    messege msg;
+    CmdMsg msg;
     string file;
     long int blocksize = 256;
     int blocknum = 1;
@@ -197,7 +138,7 @@ void FileClientUI::upload()
         {
             msg.blocksize = blocksize;
             strncpy((char *)msg.filename, file.c_str(), file.length() + 1);
-            msg.type = messege::DONWLOAD;
+            msg.type = CmdMsg::REDONWLOAD;
             writemsg(arg.fd, &msg, sizeof(msg));
             reupload(blocksize);
             return;
@@ -205,7 +146,7 @@ void FileClientUI::upload()
     }
     // 分片
     int mdtxt;
-    msg = splitfile(file.c_str(), &mdtxt, blocksize);
+    msg = splitfile(file, &mdtxt, blocksize);
     // 发送命令
     writemsg(arg.fd, &msg, sizeof(msg));
     // 发送摘要
@@ -256,147 +197,57 @@ void FileClientUI::upload()
     close(mdtxt);
 }
 
-void writehash(int fd, char *filename, int mdtxt)
+void FileClientUI::download()
 {
-    lseek(fd, 0L, SEEK_SET);
+    // 初始化sha256上下文
+    filectx = EVP_MD_CTX_create();
     const EVP_MD *mdal = EVP_sha256();
-    EVP_MD_CTX *ctx = EVP_MD_CTX_create();
-    if (NULL == ctx)
-    {
-        fprintf(stderr, "%s初始化上下文失败！\n", filename);
-        exit(-1);
-    }
-    EVP_DigestInit(ctx, mdal);
+    EVP_DigestInit(filectx, mdal);
 
-    char buf[BUFSIZE];
-    size_t size;
-    while((size = read(fd, buf, BUFSIZE)) != 0)
+    // 读取文件相关信息
+    CmdMsg msg;
+    readmsg(arg.fd, &msg, sizeof(msg));
+    // 读取md文件
+    char mdfile[30];
+    sprintf(mdfile, "md%s.txt", arg.ip);
+    // 文件分片md数组
+    int size = loadmd(arg.fd, mdfile, msg.mdlen, md, msg.blocknum + 1);
+    if (0 == size)
     {
-        EVP_DigestUpdate(ctx, buf, size);
+        perror("对端关闭！\n");
+        return;
+    }
+    else if (-1 == size)
+    {
+        perror("加载md文件失败！\n");
+        return;
     }
 
-    unsigned char mmd[SHA256_DIGEST_LENGTH];
-    char smd[70];
-    memset(smd, 0, sizeof(smd));
+    // 初始化
+    // 下载剩余分片文件
+    for (int i = 0; i < msg.blocknum; ++i)
+    {
+        size = (i >= msg.blocknum - 1) ? (msg.filesize - i * msg.blocksize) : msg.blocksize;
+        size = recvfile(arg.fd, md[i], size, filectx);
+        if (0 == size)
+        {
+            perror("暂停或者对端关闭！\n");
+            EVP_MD_CTX_destroy(filectx);
+            return;
+        }
+    }
+    char *ret = "ACK";
+    unsigned char filemd[SHA256_DIGEST_LENGTH];
     unsigned int len = SHA256_DIGEST_LENGTH;
-    EVP_DigestFinal(ctx, mmd, &len);
-
-    xto_char(mmd, smd, SHA256_DIGEST_LENGTH);
-    add(md, smd);
-    smd[strlen(smd) + 1] = '\0';
-    smd[strlen(smd)] = '\n';
-    write(mdtxt, smd, strlen(smd));
-    EVP_MD_CTX_destroy(ctx);
-}
-
-void open_new_block(int *out, char *infile, int id, char *filename)
-{
-    if (-1 != *out)
+    EVP_DigestFinal(filectx, filemd, &len);
+    if (0 == check(md[msg.blocknum].c_str(), filemd))
     {
-        close(*out);
+        ret = "ERR";
     }
-    int flen = sprintf(filename, "%s%d", infile, id);
-    filename[flen] = '\0';
-    *out = open(filename, O_RDWR | O_CREAT | O_CREAT, 0777);
-    if (-1 == *out)
-    {
-        fprintf(stderr, "打开文件%s失败！\n", filename);
-        exit(-1);
-    }
-}
-
-messege splitfile(const char *infile, int *mdtxt, long blocksize)
-{
-    char mdfilename[strlen(infile) + 10];
-    sprintf(mdfilename, "%s.md.txt", infile);
-    *mdtxt = open(mdfilename, O_CREAT | O_RDWR | O_TRUNC, 0777);
-    // 返回值
-    messege msg = {UPLOAD, blocksize = blocksize};
-    // 当前输出文件要输出的大小
-    int left_byte = 0;
-    // 缓冲区当前读的位置 缓冲区当前容纳的字节数
-    int buf_pos = 0;
-    
-    // 输入输出流
-    int in;
-    int out = -1;
-    // 片编号
-    static int id = 0;
-
-    // 输出文件名
-    char filename[strlen(infile) + 10];
-    // 文件名长度
-    int flen;
-
-    // 每次读的块大小
-    int size = 0;
-    // 片数量
-    long int blocknum;
-
-    // 缓冲区大小
-    char buf[BUFSIZE];
-
-    in = open(infile, O_RDWR);
-    if (-1 == in)
-    {
-        fprintf(stderr, "文件打开错误\n");
-        return msg;
-    }
-    // 获取文件大小
-    long int filesize = lseek(in, 0L, SEEK_END);
-    lseek(in, 0L, SEEK_SET);
-    blocknum = ceil((double)filesize / blocksize);
-    printf("文件大小：%ld 分片数：%ld\n", filesize, blocknum);
-
-    // 打开第一个片
-    open_new_block(&out, infile, id, filename);
-    left_byte = blocksize;
-    while((size = read(in, buf + buf_pos, BUFSIZE)) != 0)
-    {
-        buf_pos += size;
-        // 第id个块写入完毕
-        if (buf_pos >= left_byte)
-        {
-            // 写入
-            write(out, buf, left_byte);
-            // 
-            writehash(out, filename, *mdtxt);
-            rename(filename, get(md, id));
-            printf("block %d 已经输出完毕\n", id);
-            ++id;
-            // 将剩下的字节存回缓冲区
-            buf_pos -= left_byte;
-            memmove(buf, buf + left_byte, buf_pos);
-            // 复位剩余一个片的字节数
-            left_byte = blocksize;
-            // 打开新的片
-            open_new_block(&out, infile, id, filename);
-        }
-        else
-        {
-            size = size < buf_pos ? buf_pos : size;
-            // 正常写
-            write(out, buf, size);
-            left_byte -= size;
-            buf_pos = 0;
-        }
-    }
-    // 最后一个块没写完
-    if (left_byte > 0)
-    {
-        write(out, buf, buf_pos);
-        writehash(out, filename, *mdtxt);
-        rename(filename, get(md, id));
-        printf("block %d 已经输出完毕\n", id);
-    }
-    writehash(in, infile, *mdtxt);
-    msg.blocknum = blocknum;
-    msg.filesize = lseek(in, 0L, SEEK_END);
-    msg.mdlen = lseek(*mdtxt, 0L, SEEK_END);
-    msg.blocksize = blocksize;
-    lseek(*mdtxt, 0L, SEEK_SET);
-    strncpy(msg.filename, infile, strlen(infile) + 1);
-    close(out);
-    close(in);
-    return msg;
+    writemsg(arg.fd, ret, 4);
+    // 重传
+    redownload(arg.fd);
+    // 合并
+    combinefile(md, (char*)msg.filename, msg.blocknum);
+    EVP_MD_CTX_destroy(filectx);
 }
