@@ -39,8 +39,17 @@ public:
 	void fini() override;
 	string GetChannelInfo() override;
 	virtual Mhandler* GetNextStage(MyinsMsg* _input) = 0;
+	virtual ~TcpData()
+	{
+		if (NULL != m_out)
+		{
+			delete m_out;
+			m_out = NULL;
+		}
+	}
 };
 class TcpChannelFact {
 public:
 	virtual TcpData* CreateTcpChannel(Arg _arg) = 0;
+	virtual ~TcpChannelFact() {}
 };

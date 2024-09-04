@@ -87,6 +87,7 @@ void TcpListen::fini()
 	if (NULL != tcpFact)
 	{
 		delete tcpFact;
+		tcpFact = NULL;
 	}
 }
 
@@ -105,12 +106,13 @@ TcpListen::~TcpListen()
 	if (NULL != tcpFact)
 	{
 		delete tcpFact;
+		tcpFact = NULL;
 	}
 }
 
 bool TcpData::init()
 {
-	printf("%s连接成功...\n", m_arg.ip);
+	printf("%s连接成功...\n", m_arg.ip.c_str());
 	return true;
 }
 
@@ -147,7 +149,7 @@ bool TcpData::WriteFd(string &_output)
 #endif
 	};
 	free(buf);
-	return false;
+	return ret;
 }
 
 int TcpData::GetFd()
@@ -160,10 +162,11 @@ void TcpData::fini()
 	if (NULL != m_out)
 	{
 		delete m_out;
+		m_out = NULL;
 	}
 	if (0 <= m_arg.fd)
 	{
-		printf("关闭连接%s\n", m_arg.ip);
+		printf("关闭连接%s\n", m_arg.ip.c_str());
 		close(m_arg.fd);
 	}
 }

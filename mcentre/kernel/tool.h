@@ -1,5 +1,5 @@
-#ifndef _TOOL_H
-#define _TOOL_H 1
+#ifndef TOOL_H
+#define TOOL_H
 #include <string>
 #include <vector>
 #include <openssl/sha.h>
@@ -17,22 +17,24 @@
 #include <algorithm>
 #include <fcntl.h>
 #include <sys/stat.h>
-#include <bitset>
-#include "typedef.h"
 #define BUFSIZE 1024
 #define TIMEOUT 1000
 
+class Arg
+{
+public:
+    int fd;
+    std::string ip;
+    Arg(int _fd, std::string _ip = "") : fd(_fd) , ip(_ip){};
+};
 
+namespace mytool {
 int mgets(char *buf, int size, int fd);
 int writemsg(int fd, void *msg, int left_byte);
 int readmsg(int fd, void *msg, int left_byte);
 void xto_char(unsigned char *xmd, char *smd, int len);
 int check(const char *clientmd, unsigned char *servermd);
 int find_nnull(std::vector<std::string> &l);
-void printT(int i, int sum, std::bitset<MAX_BLOCK_NUM> &l);
-int recvfile(int fd, std::string outfile, int left_size, EVP_MD_CTX *filectx);
-int loadmd(int fd, char *mdfile, int left_size, std::vector<std::string> &md, int num);
-void redownload(int fd);
-void combinefile(std::vector<std::string> md, const char* filename, int blocknum);
-
+void printT(int i, int sum);
+}
 #endif

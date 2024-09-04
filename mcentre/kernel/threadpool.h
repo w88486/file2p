@@ -61,10 +61,6 @@ template <typename T>
 class threadPool
 {
 public:
-    void SetPoolStop()
-    {
-        stop = true;
-    }
     threadPool(int number = 1);
     ~threadPool();
     bool appand(T *request); //?????????
@@ -132,7 +128,6 @@ void threadPool<T>::run()
             cout << "thread" << this_thread::get_id() << ":" << endl;
             request->process();
             delete request;
-            request = NULL;
         }
     }
 }
@@ -140,8 +135,5 @@ class Request
 {
 public:
     virtual void process() = 0;
-    virtual ~Request()
-    {
-    }
 };
 #endif

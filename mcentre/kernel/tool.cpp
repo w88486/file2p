@@ -1,11 +1,5 @@
 #include "tool.h"
-#include "typedef.h"
-#include <cstdio>
-
-#define RED "\033[0;31m"
-#define GREEN "\033[0;32m"
-#define GRAY "\033[0;90m"
-#define RESET "\033[0m"
+namespace mytool {
 
 int mgets(char *buf, int size, int fd)
 {
@@ -16,14 +10,14 @@ int mgets(char *buf, int size, int fd)
     FD_SET(fd, &readfds);
     if (0 <= select(fd + 1, &readfds, NULL, NULL, NULL))
     {
-        while (recv(fd, &c, 1, MSG_DONTWAIT))
+        while(recv(fd, &c, 1, MSG_DONTWAIT))
         {
             buf[ret++] = c;
             if (c == '\n')
             {
                 break;
             }
-            if (ret >= size - 1)
+            if (ret >= size -1)
             {
                 break;
             }
@@ -47,12 +41,11 @@ int writemsg(int fd, void *msg, int left_byte)
     struct timeval timeout = {TIMEOUT, 0};
     if (0 < (con = select(fd + 1, NULL, &fds, &fds, &timeout)))
     {
-        while (left_byte > 0)
+        while(left_byte > 0)
         {
-            size = send(fd, (char *)msg + pos, left_byte, MSG_DONTWAIT | MSG_NOSIGNAL);
+            size = send(fd, (char*)msg + pos, left_byte, MSG_DONTWAIT | MSG_NOSIGNAL);
             if (EPIPE == errno)
             {
-                con = -1;
                 break;
             }
             if (-1 == size)
@@ -63,7 +56,7 @@ int writemsg(int fd, void *msg, int left_byte)
             left_byte -= size;
         }
     }
-    return 0 != con ? con : pos;
+    return 0 == con ? con : pos;
 }
 int readmsg(int fd, void *msg, int left_byte)
 {
@@ -79,9 +72,9 @@ int readmsg(int fd, void *msg, int left_byte)
     struct timeval timeout = {TIMEOUT, 0};
     if (0 < (con = select(fd + 1, &readfds, NULL, &readfds, &timeout)))
     {
-        while (left_byte > 0)
+        while(left_byte > 0)
         {
-            size = recv(fd, (char *)msg + pos, left_byte, MSG_DONTWAIT);
+            size = recv(fd, (char*)msg + pos, left_byte, MSG_DONTWAIT);
             if (-1 == size && EAGAIN == errno)
             {
                 errno = 0;
@@ -89,7 +82,6 @@ int readmsg(int fd, void *msg, int left_byte)
             }
             else if (0 == size)
             {
-                con = -1;
                 break;
             }
             else if (-1 != size)
@@ -99,7 +91,7 @@ int readmsg(int fd, void *msg, int left_byte)
             }
         }
     }
-    return 0 != con ? con : pos;
+    return 0 == con ? con : pos;
 }
 void xto_char(unsigned char *xmd, char *smd, int len)
 {
@@ -118,49 +110,27 @@ int check(const char *clientmd, unsigned char *servermd)
     return 0 == strncmp(clientmd, md, strlen(md));
 }
 
-int find_nnull(std::bitset<MAX_BLOCK_NUM> &l)
+int find_nnull(std::vector<std::string> &l)
 {
-    int i = l._Find_first();
-    if (i == l.size())
+    auto i = std::find_if(l.begin(), l.end(), [](std::string s){return s.empty();});
+    if (i == l.end())
     {
         return -1;
     }
     else
     {
-        return i;
+        return i - l.begin();
     }
 }
 
-void printT(int i, int sum, std::bitset<MAX_BLOCK_NUM> &l)
+void printT(int i, int sum)
 {
     int n = (i * 100) / sum;
     printf("%d%%", n);
-    while (n-- > 0)
+    while(n-- > 0)
     {
         printf("=");
     }
-       printf("\n");
-    for (int j = 0; j < sum; j++)
-    {
-        if (j < i)
-        {
-            if (l[j])
-            {
-                printf("%sE%s ", RED, RESET);
-            }
-            else
-            {
-                printf("%sC%s ", GREEN, RESET);
-            }
-        }
-        else
-        {
-            printf("%sU%s ", GRAY, RESET);
-        }
-        if (i % 50 == 0)
-        {
-            printf("\n");
-        }
-    }
-    printf("\n");
+}
+
 }

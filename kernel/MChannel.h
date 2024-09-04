@@ -1,5 +1,4 @@
 #pragma once
-#include<string>
 #include"MyinsKernel.h"
 #include"Mhandler.h"
 using namespace std;

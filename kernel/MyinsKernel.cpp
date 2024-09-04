@@ -13,9 +13,9 @@ MyinsKernel::MyinsKernel()
 void MyinsKernel::run()
 {
 	// ѭ������ִ��
-	while (1)
+	while (!stop)
 	{
-		struct epoll_event events[200];
+		struct epoll_event events[MAX_THREADS];
 		// ������
 		int ret_size = epoll_wait(epoll_fd, events, 200, -1);
 		if (0 == ret_size)
@@ -53,7 +53,7 @@ bool MyinsKernel::AddChannel(MChannel *channel)
 	if (true == channel->init())
 	{
 		struct epoll_event event;
-		event.events = EPOLLIN;
+		event.events = EPOLLIN | EPOLLET;
 		event.data.ptr = channel;
 		// ��������������0��������
 		int ret = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, channel->GetFd(), &event);
@@ -73,12 +73,13 @@ void MyinsKernel::DelChannel(MChannel *channel)
 	channelList.remove(channel);
 	channel->fini();
 	delete channel;
+	channel = NULL;
 }
 
 bool MyinsKernel::ModChannel_AddOut(MChannel *channel)
 {
 	struct epoll_event event;
-	event.events = EPOLLIN | EPOLLOUT;
+	event.events = EPOLLIN | EPOLLOUT | EPOLLET;
 	event.data.ptr = channel;
 	// ��������������0��������
 	int ret = epoll_ctl(epoll_fd, EPOLL_CTL_MOD, channel->GetFd(), &event);
@@ -93,7 +94,7 @@ void MyinsKernel::ModChannel_DelOut(MChannel *channel)
 {
 	// ��������������1ȡ����������
 	struct epoll_event event;
-	event.events = EPOLLIN;
+	event.events = EPOLLIN | EPOLLET;
 	event.data.ptr = channel;
 	// ��������������0��������
 	int ret = epoll_ctl(epoll_fd, EPOLL_CTL_MOD, channel->GetFd(), &event);

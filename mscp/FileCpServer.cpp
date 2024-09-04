@@ -5,115 +5,27 @@
 #include <cmath>
 #include <sys/sendfile.h>
 
-MyinsMsg* FileCpServer::InternelHandle(MyinsMsg* _input)
+extern int level[4];
+
+MyinsMsg *FileCpServer::InternelHandle(MyinsMsg *_input)
 {
     GET_REF_FROM_MSG(ByteMsg, byte, *_input);
-    auto msg = new CmdMsg(byte.content);
-    switch(msg->type)
+    auto msg = new DeviceMsg(byte);
+    switch (msg->ctx->type)
     {
-        case CmdMsg::DISPLAY:
-            m_out = new DisplayFile(arg);
-            break;
-        case CmdMsg::UPLOAD:
-            m_out = new DownLoad(arg);
-            break;
-        case CmdMsg::REUPLOAD:
-            m_out = new RedownLoad(arg);
-            break;
-        case CmdMsg::DONWLOAD:
-            m_out = new UpLoad(arg);
-            break;
-        default:
+    case MQTT::SUBSCRIBE:
+        m_out = new UpLoad(arg);
+        break;
+    case MQTT::SUBRECV:
+        m_out = new ReUpLoad(arg);
+        break;
+    default:
+        break;
     }
     return msg;
 }
-Mhandler* FileCpServer::GetNext(MyinsMsg* _input)
-{
-    return m_out;
-}
 
-
-MyinsMsg* DownLoad::InternelHandle(MyinsMsg* _input)
-{
-    GET_REF_FROM_MSG(CmdMsg, msg, *_input);
-    // 初始化sha256上下文
-    filectx = EVP_MD_CTX_create();
-    const EVP_MD *mdal = EVP_sha256();
-    EVP_DigestInit(filectx, mdal);
-    // 读取md文件
-    char mdfile[30];
-    sprintf(mdfile, "md%s.txt", arg.ip);
-    // 文件分片md数组
-    arg.m_channel->md.resize(msg.blocknum + 1);
-    int size = loadmd(arg.fd, mdfile, msg.mdlen, arg.m_channel->md, msg.blocknum + 1);
-    if (0 == size)
-    {
-        perror("对端关闭！\n");
-        return;
-    }
-    else if (-1 == size)
-    {
-        perror("加载md文件失败！\n");
-        return;
-    }
-
-    // 初始化
-    // 下载剩余分片文件
-    for (int i = 0; i < msg.blocknum; ++i)
-    {
-        size = (i >= msg.blocknum - 1) ? (msg.filesize - i * msg.blocksize) : msg.blocksize;
-        size = recvfile(arg.fd, arg.m_channel->md[i], size, filectx);
-        if (0 == size)
-        {
-            perror("暂停或者对端关闭！\n");
-            EVP_MD_CTX_destroy(filectx);
-            return;
-        }
-    }
-    char *ret = "ACK";
-    unsigned char filemd[SHA256_DIGEST_LENGTH];
-    unsigned int len = SHA256_DIGEST_LENGTH;
-    EVP_DigestFinal(filectx, filemd, &len);
-    if (0 == check(arg.m_channel->md[msg.blocknum].c_str(), filemd))
-    {
-        ret = "ERR";
-    }
-    writemsg(arg.fd, ret, 4);
-    EVP_MD_CTX_destroy(filectx);
-    return &msg;
-}
-Mhandler* DownLoad::GetNext(MyinsMsg* _input)
-{
-    return m_out;
-}
-
-// 重传
-MyinsMsg* RedownLoad::InternelHandle(MyinsMsg* _input)
-{
-    CmdMsg buf;
-    // 可能有问题
-    while(0 < readmsg(arg.fd, &buf, sizeof(buf)))
-    {
-        if (CmdMsg::END == buf.type)
-        {
-            break;
-        }
-        recvfile(arg.fd, (char*)buf.filename, buf.filesize, NULL);
-    }
-    return _input;
-}
-Mhandler* RedownLoad::GetNext(MyinsMsg* _input)
-{
-    return m_out;
-}
-
-// 合并
-MyinsMsg* CombineFile::InternelHandle(MyinsMsg* _input)
-{
-    GET_REF_FROM_MSG(CmdMsg, msg, *_input);
-    combinefile(arg.m_channel->md, (char*)msg.filename, msg.blocknum);
-}
-Mhandler* CombineFile::GetNext(MyinsMsg* _input)
+Mhandler *FileCpServer::GetNext(MyinsMsg *_input)
 {
     return m_out;
 }
@@ -132,7 +44,7 @@ void UpLoad::writehash(int fd, string filename, int mdtxt)
 
     char buf[BUFSIZE];
     size_t size;
-    while((size = read(fd, buf, BUFSIZE)) != 0)
+    while ((size = read(fd, buf, BUFSIZE)) != 0)
     {
         EVP_DigestUpdate(ctx, buf, size);
     }
@@ -157,7 +69,7 @@ void UpLoad::open_new_block(int *out, string infile, int id, char *filename)
     {
         close(*out);
     }
-    int flen = sprintf(filename, "%s%d", infile, id);
+    int flen = sprintf(filename, "%s%d", infile.c_str(), id);
     filename[flen] = '\0';
     *out = open(filename, O_RDWR | O_CREAT | O_CREAT, 0777);
     if (-1 == *out)
@@ -167,44 +79,41 @@ void UpLoad::open_new_block(int *out, string infile, int id, char *filename)
     }
 }
 
-CmdMsg UpLoad::splitfile(string infile, int *mdtxt, long blocksize)
+DeviceMsg *UpLoad::splitfile(string infile, int *mdtxt, long blocksize)
 {
-    char mdfilename[infile.length() + 10];
-    sprintf(mdfilename, "%s.md.txt", infile.c_str());
-    *mdtxt = open(mdfilename, O_CREAT | O_RDWR | O_TRUNC, 0777);
-    // 返回值
-    CmdMsg msg;
-    msg.type = CmdMsg::UPLOAD;
-    msg.blocksize = blocksize;
+    auto ctx = (MQTT *)malloc(sizeof(MQTT));
+    // 构建的返回值
+    MQTT_Init(ctx, MQTT::PUBLISH, 128);
+
     // 当前输出文件要输出的大小
     int left_byte = 0;
     // 缓冲区当前读的位置 缓冲区当前容纳的字节数
     int buf_pos = 0;
-    
     // 输入输出流
     int in;
     int out = -1;
     // 片编号
     static int id = 0;
-
     // 输出文件名
     char filename[infile.length() + 10];
-    // 文件名长度
-    int flen;
-
     // 每次读的块大小
     int size = 0;
     // 片数量
     long int blocknum;
-
     // 缓冲区大小
     char buf[BUFSIZE];
 
+    // 打开摘要
+    char mdfilename[infile.length() + 10];
+    sprintf(mdfilename, "%s.md.txt", infile.c_str());
+    *mdtxt = open(mdfilename, O_CREAT | O_RDWR | O_TRUNC, 0777);
+    // 打开要传输的文件
     in = open(infile.c_str(), O_RDWR);
     if (-1 == in)
     {
         fprintf(stderr, "文件打开错误\n");
-        return msg;
+        MQTT_FillType(ctx, MQTT::ERROR);
+        return new DeviceMsg(ctx);
     }
     // 获取文件大小
     long int filesize = lseek(in, 0L, SEEK_END);
@@ -215,7 +124,7 @@ CmdMsg UpLoad::splitfile(string infile, int *mdtxt, long blocksize)
     // 打开第一个片
     open_new_block(&out, infile, id, filename);
     left_byte = blocksize;
-    while((size = read(in, buf + buf_pos, BUFSIZE)) != 0)
+    while ((size = read(in, buf + buf_pos, BUFSIZE)) != 0)
     {
         buf_pos += size;
         // 第id个块写入完毕
@@ -223,7 +132,7 @@ CmdMsg UpLoad::splitfile(string infile, int *mdtxt, long blocksize)
         {
             // 写入
             write(out, buf, left_byte);
-            // 
+            //
             writehash(out, filename, *mdtxt);
             rename(filename, arg.m_channel->md[id].c_str());
             printf("block %d 已经输出完毕\n", id);
@@ -254,147 +163,107 @@ CmdMsg UpLoad::splitfile(string infile, int *mdtxt, long blocksize)
         printf("block %d 已经输出完毕\n", id);
     }
     writehash(in, infile, *mdtxt);
-    msg.blocknum = blocknum;
-    msg.filesize = lseek(in, 0L, SEEK_END);
-    msg.mdlen = lseek(*mdtxt, 0L, SEEK_END);
-    msg.blocksize = blocksize;
+
+    MQTT_Fill(ctx, "filename", infile.c_str());
+    char tmp[20];
+    sprintf(tmp, "%ld", blocksize);
+    MQTT_Fill(ctx, "blocksize", tmp);
+    // 填充摘要长度
+    int tmpnum = lseek(*mdtxt, 0L, SEEK_END);
+    sprintf(tmp, "%d", tmpnum);
+    MQTT_Fill(ctx, "mdlen", tmp);
+    // 填充剩余返回值
+    sprintf(tmp, "%ld", blocknum);
+    MQTT_Fill(ctx, "blocknum", tmp);
+    sprintf(tmp, "%ld", filesize);
+    MQTT_Fill(ctx, "filesize", tmp);
+    auto msg = new DeviceMsg(ctx);
+    msg->blocknum = blocknum;
+    msg->blocksize = blocksize;
+    msg->filesize = filesize;
+    msg->mdlen = tmpnum;
+
     lseek(*mdtxt, 0L, SEEK_SET);
-    strncpy((char*)msg.filename, infile.c_str(), infile.length() + 1);
     close(out);
     close(in);
     return msg;
 }
+MyinsMsg *UpLoad::InternelHandle(MyinsMsg *_input)
+{
+    GET_REF_FROM_MSG(DeviceMsg, msg, *_input);
+    char filename[512];
+    MQTT_GetVHeader(msg.ctx, "filename", filename, sizeof(filename));
 
-void UpLoad::reupload(long int blocksize)
-{
-    char ret[6];
-    // 重传传输失败的文件
-    int i;
-    CmdMsg msg;
-    msg.type = CmdMsg::SPLITFILE;
-    while (-1 != (i = find_nnull(arg.m_channel->md)))
-    {
-        // 填充消息
-        int fd = open(arg.m_channel->md[i].c_str(), O_RDONLY);
-        if (-1 == fd)
-        {
-            fprintf(stderr, "缺失文件：%s\n", arg.m_channel->md[i].c_str());
-            return;
-        }
-        msg.filesize = lseek(fd, 0L, SEEK_END);
-        strncpy((char *)msg.filename, arg.m_channel->md[i].c_str(), arg.m_channel->md[i].length() + 1);
-        if (0 == writemsg(arg.fd, &msg, sizeof(msg)))
-        {
-            // 超时了
-            break;
-        }
-        sendfile(arg.fd, fd, 0L, blocksize);
-        readmsg(arg.fd, ret, 6);
-        if (0 == strncmp(ret, "ACK", 3))
-        {
-            printf("重发送%s成功\n", arg.m_channel->md[i]);
-            arg.m_channel->md[i] = "";
-        }
-        else
-        {
-            fprintf(stderr, "重发送%s失败！\n", arg.m_channel->md[i]);
-        }
-    }
-    msg.type = CmdMsg::END;
-    writemsg(arg.fd, &msg, sizeof(msg));
-}
+    msg.blocksize = DEFBLOCKSIZE;
 
-int UpLoad::checkupload(string filename)
-{
-    // run 139.159.195.171 redis-stable.tar.gz
-    redisContext *ctx = redisConnect("127.0.0.1", 6379);
-    if (NULL == ctx)
-    {
-        perror("打开redis失败！\n");
-        return -1;
-    }
-    redisReply *res;
-    res = (redisReply *)redisCommand(ctx, "smembers %s%s", arg.ip, filename.c_str());
-    for (int i = 0; i < res->elements; i++)
-    {
-        arg.m_channel->md.emplace_back(res->element[i]->str);
-    }
-    freeReplyObject(res);
-    redisFree(ctx);
-    return res->elements;
-}
-MyinsMsg* UpLoad::InternelHandle(MyinsMsg* _input)
-{
-    GET_REF_FROM_MSG(CmdMsg, msg, *_input);
-    // 在redis中检查是否暂停或终止后的请求，需要重传 run 139.159.195.171 redis-stable.tar.gz
-    if (checkupload((char*)msg.filename) > 0)
-    {
-        int ch;
-        msg.type = CmdMsg::DONWLOAD;
-        writemsg(arg.fd, &msg, sizeof(msg));
-        reupload(msg.blocksize);
-        return;
-    }
     // 分片
     int mdtxt;
-    msg = splitfile((char*)msg.filename, &mdtxt, msg.blocksize);
-    // 发送命令
-    writemsg(arg.fd, &msg, sizeof(msg));
+    msg = *splitfile(filename, &mdtxt, msg.blocksize);
+    // 发送相关信息
+    writemsg(arg.fd, msg.ctx->buf, msg.ctx->size);
+    if (MQTT::ERROR == msg.ctx->type)
+    {
+        return NULL;
+    }
     // 发送摘要
-    sendfile(arg.fd, mdtxt, 0L, msg.mdlen);
-    char rett[6];
-    readmsg(arg.fd, rett, 4);
-    if (0 == strncmp(rett, "ACK", 3))
-    {
-        printf("发送摘要成功\n");
-    }
-    else
-    {
-        fprintf(stderr, "发送摘要失败\n");
-        arg.fd = -1;
-        close(mdtxt);
-        return;
-    }
+    size_t ssize = sendfile(arg.fd, mdtxt, 0L, msg.mdlen);
     // 发送片 run 139.159.195.171 redis-stable.tar.gz
     for (int i = 0; i < msg.blocknum; ++i)
     {
+        // 问题
         int infd = open(arg.m_channel->md[i].c_str(), O_RDONLY);
-        size_t ssize = sendfile(arg.fd, infd, 0L, msg.blocksize);
-        // 接收结果判断是否成功
-        readmsg(arg.fd, rett, 4);
-        if (0 == strncmp(rett, "ACK", 3))
+        ssize = sendfile(arg.fd, infd, 0L, msg.blocksize);
+        close(infd);
+    }
+    shutdown(arg.fd, SHUT_WR);
+    return NULL;
+}
+Mhandler *UpLoad::GetNext(MyinsMsg *_input)
+{
+    return NULL;
+}
+
+MyinsMsg *ReUpLoad::InternelHandle(MyinsMsg *_input)
+{
+    GET_REF_FROM_MSG(DeviceMsg, msg, *_input);
+    char tmp[512];
+    MQTT_GetVHeader(msg.ctx, "filename", tmp, sizeof(tmp));
+    int mdtxt = open(tmp, O_RDONLY);
+    if (-1 == mdtxt)
+    {
+        MQTT_FillType(msg.ctx, MQTT::ERROR);
+        // 发送相关信息
+        writemsg(arg.fd, msg.ctx->buf, 5);
+        return NULL;
+    }
+
+    int filesize = lseek(mdtxt, 0L, SEEK_END);
+    lseek(mdtxt, 0L, SEEK_SET);
+
+    // 填充长度
+    msg.ctx->left_byte = filesize;
+    for (int i = 0; i < 4; ++i)
+    {
+        if (filesize > 0x7f)
         {
-            printT(i + 1, msg.blocknum);
-            printf("发送%s成功\n", arg.m_channel->md[i]);
-            arg.m_channel->md[i] = "";
+            msg.ctx->buf[i + 1] = (filesize & 0x7f) | 0x80;
+            filesize >>= 7;
         }
         else
         {
-            // 输出进度
-            printT(i + 1, msg.blocknum);
-            fprintf(stderr, "发送%s出错", arg.m_channel->md[i]);
+            msg.ctx->buf[i + 1] = (filesize & 0x7f);
+            break;
         }
-        close(infd);
     }
-    readmsg(arg.fd, rett, 4);
-    if (0 != strncmp(rett, "ACK", 3))
-    {
-        fprintf(stderr, "文件%s总hash值有误！\n", msg.filename);
-    }
-    arg.m_channel->md[msg.blocknum] = "";
-    // 重传
-    reupload(msg.blocksize);
-}
-Mhandler* UpLoad::GetNext(MyinsMsg* _input)
-{
-    return m_out;
-}
+    MQTT_FillType(msg.ctx, MQTT::SUBACK);
 
-MyinsMsg* DisplayFile::InternelHandle(MyinsMsg* _input)
-{
-
+    // 发送相关信息
+    writemsg(arg.fd, msg.ctx->buf, 5);
+    // 发送文件
+    sendfile(arg.fd, mdtxt, 0L, msg.ctx->left_byte);
+    return NULL;
 }
-Mhandler* DisplayFile::GetNext(MyinsMsg* _input)
+Mhandler *ReUpLoad::GetNext(MyinsMsg *_input)
 {
-    return m_out;
+    return NULL;
 }
